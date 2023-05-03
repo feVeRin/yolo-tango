@@ -14,7 +14,7 @@ class BBone_ELAN(nn.Module):
         self.ker = ker # kernel size
         self.depth = depth # depth (could be variable)
         
-        # index를 ELAN 정의할 때 parameter로 받으면? (헌성이형 아이디어와 비슷해보임)
+        # index를 ELAN 정의할 때 parameter로 받으면?
         self.idx = [idx for idx in range(self.depth * 2) if (idx % 2 == 1 or idx == 0)] #include idx 0 always
 
         elans = {} # elan module dictionary
