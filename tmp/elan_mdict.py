@@ -62,6 +62,57 @@ class Head_ELAN(nn.Module):
 
         self.chan1 = chan1
         self.chan2 = chan2
+        self.ker = ker 
+        self.depth = depth 
+
+        self.idx = [idx for idx in range(self.depth+1)] # use all idx
+
+        elans = {}
+        for d in range(self.depth+1):
+            elans['HeadELAN_{0}'.format(d+1)] = self.construct_elan(d)
+
+        self.elan_dict = nn.ModuleDict(elans)
+        self.cat = Concat(dimension=1)
+
+    def construct_elan(self, depth):
+        elan = nn.Sequential()
+
+        if depth == 0:
+            elan.add_module('Conv_1', Conv(self.chan1, self.chan2, 1, 1))
+
+        else:
+          for i in range(depth):
+            if i == 0:
+                elan.add_module('Conv_{0}'.format(i+2), Conv(self.chan1, self.chan2, 1, 1))
+            else:
+                elan.add_module('Conv_{0}'.format(i+2), Conv(self.chan2, self.chan2, self.ker, 1))
+
+        return elan
+    
+    def forward(self, x):
+        tmp_out = []
+
+        for _, elan in self.elan_dict.items():
+          tmp_out.append(elan(x))
+        
+        out = self.cat([tmp_out[d] for d in self.idx])
+
+        return out
+
+
+#============================================================
+# is this right? need discussion..
+# do not use now
+
+class Head_ELAN(nn.Module):
+    '''
+    Head ELAN
+    '''
+    def __init__(self, chan1, chan2, ker, depth):
+        super(Head_ELAN, self).__init__()
+
+        self.chan1 = chan1
+        self.chan2 = chan2
         self._chan = chan2 // 2 # hidden channel (channel2 // 2)
         self.ker = ker 
         self.depth = depth 
