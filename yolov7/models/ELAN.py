@@ -13,40 +13,38 @@ class BBoneELAN(nn.Module):
 
         self.idx = [idx for idx in range(self.depth * 2) if (idx % 2 == 1 or idx == 0)] #include idx 0 always
 
-        elans = {} # elan module dictionary
-        for d in range(self.depth*2):
-            elans['BBoneELAN_{0}'.format(d+1)] = self.construct_elan(d) # ELAN block consturct
-
-        self.elan_dict = nn.ModuleDict(elans) # ELAN module dictionary to ModuleDict
+        self.ELAN = self.construct_elan(self.depth*2)
         self.cat = Concat(dimension=1) # from yolov7 modules
 
     def construct_elan(self, depth):
         '''
         construct ELAN modules
         '''
-        elan = nn.Sequential()
+        full_elan = nn.Sequential()
+        elan_span = nn.Sequential()
+        
+        full_elan.add_module('Conv_1', Conv(self.chan1, self.chan2, 1, 1)) # 왼쪽
 
-        if depth == 0:
-            elan.add_module('Conv_1', Conv(self.chan1, self.chan2, 1, 1))
+        for d in range(depth-1): # 오른쪽 elan span
+          if d == 0:
+            elan_span.add_module('Conv_{0}'.format(d+2), Conv(self.chan1, self.chan2, 1, 1))
+                
+          else:
+            elan_span.add_module('Conv_{0}'.format(d+2), Conv(self.chan2, self.chan2, self.ker, 1))
 
-        else:
-            for i in range(depth):
-              if i == 0:
-                elan.add_module('Conv_{0}'.format(i+2), Conv(self.chan1, self.chan2, 1, 1))
-              else:
-                elan.add_module('Conv_{0}'.format(i+2), Conv(self.chan2, self.chan2, self.ker, 1))
+        full_elan.add_module('Elan_span', elan_span)
 
-
-        return elan
+        return full_elan
     
     def forward(self, x):
         tmp_out = []
-        
-        # idx에 해당하는것 먼저 select하고 for문 돌리는게 나을 수도?
 
-        for _, elan in self.elan_dict.items(): # get each elan module output
-          tmp_out.append(elan(x))
-        
+        for d in range(self.depth*2):
+          if d == 0:
+            tmp_out.append(self.ELAN[0](x)) # 왼쪽
+          else:
+            tmp_out.append(self.ELAN[1][:d](x)) # elan span에서 해당 index까지 convolution된 output
+  
         out = self.cat([tmp_out[d] for d in self.idx]) # concat
 
         return out
@@ -68,36 +66,36 @@ class HeadELAN(nn.Module):
 
         self.idx = [idx for idx in range(self.depth+1)] # use all idx
 
-        elans = {}
-        for d in range(self.depth+1):
-            elans['HeadELAN_{0}'.format(d+1)] = self.construct_elan(d)
-
-        self.elan_dict = nn.ModuleDict(elans)
+        self.ELAN = self.construct_elan(self.depth*2)
         self.cat = Concat(dimension=1)
 
     def construct_elan(self, depth):
-        elan = nn.Sequential()
+        full_elan = nn.Sequential()
+        elan_span = nn.Sequential()
 
-        if depth == 0:
-            elan.add_module('Conv_1', Conv(self.chan1, self.chan2, 1, 1))
+        full_elan.add_module('Conv_1', Conv(self.chan1, self.chan2, 1, 1)) # 왼쪽
 
-        else:
-          for i in range(depth):
-            if i == 0:
-                elan.add_module('Conv_{0}'.format(i+2), Conv(self.chan1, self.chan2, 1, 1))
-            elif i == 1:
-                elan.add_module('Conv_{0}'.format(i+2), Conv(self.chan2, self._chan, self.ker, 1))
-            else:
-                elan.add_module('Conv_{0}'.format(i+2), Conv(self._chan, self._chan, self.ker, 1))
+        for d in range(depth-1): # 오른쪽 elan span
+          if d == 0:
+            elan_span.add_module('Conv_{0}'.format(d+2), Conv(self.chan1, self.chan2, 1, 1))
+          elif d == 1:
+            elan_span.add_module('Conv_{0}'.format(d+2), Conv(self.chan2, self._chan, self.ker, 1))
+          else:
+            elan_span.add_module('Conv_{0}'.format(d+2), Conv(self._chan, self._chan, self.ker, 1))
 
-        return elan
+        full_elan.add_module('Elan_span', elan_span)
+
+        return full_elan
     
     def forward(self, x):
         tmp_out = []
 
-        for _, elan in self.elan_dict.items():
-          tmp_out.append(elan(x))
-        
-        out = self.cat([tmp_out[d] for d in self.idx])
+        for d in range(self.depth*2):
+          if d == 0:
+            tmp_out.append(self.ELAN[0](x))
+          else:
+            tmp_out.append(self.ELAN[1][:d](x)) # elan span에서 해당 index까지 convolution된 output
+  
+        out = self.cat([tmp_out[d] for d in self.idx]) # concat
 
         return out
