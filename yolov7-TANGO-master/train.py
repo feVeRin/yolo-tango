@@ -41,16 +41,6 @@ from nas.supernet.supernet_yolov7 import YOLOSuperNet
 logger = logging.getLogger(__name__)
 
 
-# progressiv shrink
-from nas.search_algorithm.distributed_run_manager import DistributedRunManager
-from ofa_utils import (
-    cross_entropy_with_label_smoothing,
-    cross_entropy_loss_with_soft_target,
-    write_log,
-    init_models,
-)
-
-
 def train(hyp, opt, device, tb_writer=None):
     logger.info(colorstr('hyperparameters: ') + ', '.join(f'{k}={v}' for k, v in hyp.items()))
     save_dir, epochs, batch_size, total_batch_size, weights, rank, freeze = \
@@ -261,9 +251,11 @@ def train(hyp, opt, device, tb_writer=None):
                                             hyp=hyp, augment=True, cache=opt.cache_images, rect=opt.rect, rank=rank,
                                             world_size=opt.world_size, workers=opt.workers,
                                             image_weights=opt.image_weights, quad=opt.quad, prefix=colorstr('train: '))
+    
     mlc = np.concatenate(dataset.labels, 0)[:, 0].max()  # max label class
     nb = len(dataloader)  # number of batches
     assert mlc < nc, 'Label class %g exceeds nc=%g in %s. Possible class labels are 0-%g' % (mlc, nc, opt.data, nc - 1)
+
 
     # Process 0
     if rank in [-1, 0]:
@@ -319,8 +311,6 @@ def train(hyp, opt, device, tb_writer=None):
                 f'Logging results to {save_dir}\n'
                 f'Starting training for {epochs} epochs...')
     torch.save(model, wdir / 'init.pt')
-
-    # for epoch in range()
     for epoch in range(start_epoch, epochs):  # epoch ------------------------------------------------------------------
         model.train()
 
@@ -354,7 +344,7 @@ def train(hyp, opt, device, tb_writer=None):
             ni = i + nb * epoch  # number integrated batches (since train start)
             imgs = imgs.to(device, non_blocking=True).float() / 255.0  # uint8 to float32, 0-255 to 0.0-1.0
 
-            # Warmup
+            # (Using) Warmup 
             if ni <= nw:
                 xi = [0, nw]  # x interp
                 # model.gr = np.interp(ni, xi, [0.0, 1.0])  # iou loss ratio (obj_loss = 1.0 or iou)
@@ -365,7 +355,7 @@ def train(hyp, opt, device, tb_writer=None):
                     if 'momentum' in x:
                         x['momentum'] = np.interp(ni, xi, [hyp['warmup_momentum'], hyp['momentum']])
 
-            # Multi-scale
+            # (Not used) Multi-scale
             if opt.multi_scale:
                 sz = random.randrange(imgsz * 0.5, imgsz * 1.5 + gs) // gs * gs  # size
                 sf = sz / max(imgs.shape[2:])  # scale factor
@@ -373,59 +363,27 @@ def train(hyp, opt, device, tb_writer=None):
                     ns = [math.ceil(x * sf / gs) * gs for x in imgs.shape[2:]]  # new shape (stretched to gs-multiple)
                     imgs = F.interpolate(imgs, size=ns, mode='bilinear', align_corners=False)
 
-            # progressive
-
-            # soft target
-            if opt.kd_ratio > 0:
-                opt.teacher_model.train()
-                with torch.no_grad():
-                    soft_logits = opt.teacher_model(imgs).detach()
-                    soft_label = F.softmax(soft_logits, dim=1)
-
-            # train one epoch()
-            loss_items = []
+            # set subnet settings
             for _ in range(opt.dynamic_batch_size):
-                # set random seed before sampling
                 subnet_seed = int("%d%.3d%.3d" % (epoch * nb + i, _, 0))
                 random.seed(subnet_seed)
-                subnet_settings = model.sample_active_subnet()
+                # subnet_settings = model.sample_active_subnet()
+                subnet_settings = model.module.sample_active_subnet()
 
-                output = model(imgs)
-
-                #loss_items = []
-                if opt.kd_ratio == 0:
-                    loss = nn.CrossEntropyLoss(output, labels)
-                    #loss_type = "ce"
-                else:
-                    if opt.kd_type == "ce":
-                        kd_loss = cross_entropy_loss_with_soft_target(
-                            output, soft_label
-                        )
+                # Forward
+                with amp.autocast(enabled=cuda):
+                    pred = model(imgs)  # forward
+                    if 'loss_ota' not in hyp or hyp['loss_ota'] == 1:
+                        loss, loss_items = compute_loss_ota(pred, targets.to(device), imgs)  # loss scaled by batch_size
                     else:
-                        kd_loss = F.mse_loss(output, soft_logits)
-                    loss = opt.kd_ratio * kd_loss + nn.CrossEntropyLoss(
-                        output, labels
-                    )
-                    #loss_type = "%.1fkd-%s & ce" % (opt.kd_ratio, opt.kd_type)
+                        loss, loss_items = compute_loss(pred, targets.to(device))  # loss scaled by batch_size
+                    if rank != -1:
+                        loss *= opt.world_size  # gradient averaged between devices in DDP mode
+                    if opt.quad:
+                        loss *= 4.
 
-                    # measure accuracy and record loss
-                    loss_items.append(loss)
-                    #run_manager.update_metric(metric_dict, output, target)
-
-                loss.backward()
-            scaler.scale(loss).backward() #optimizer.step()
-
-            # Forward (기존)
-            #    with amp.autocast(enabled=cuda):
-            #        pred = model(imgs)  # forward
-            #        if 'loss_ota' not in hyp or hyp['loss_ota'] == 1:
-            #            loss, loss_items = compute_loss_ota(pred, targets.to(device), imgs)  # loss scaled by batch_size
-            #        else:
-            #            loss, loss_items = compute_loss(pred, targets.to(device))  # loss scaled by batch_size
-            #        if rank != -1:
-            #            loss *= opt.world_size  # gradient averaged between devices in DDP mode
-            #        if opt.quad:
-            #            loss *= 4.
+                # Backward
+                scaler.scale(loss).backward()
 
             # Optimize
             if ni % accumulate == 0:
@@ -584,7 +542,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--weights', type=str, default='', help='initial weights path')
     parser.add_argument('--cfg', type=str, default='./yaml/yolov7_supernet.yml', help='model.yaml path')
-    parser.add_argument('--data', type=str, default='data/coco128.yaml', help='data.yaml path')
+    #parser.add_argument('--data', type=str, default='data/coco128.yaml', help='data.yaml path') #coco128
+    parser.add_argument('--data', type=str, default='./yaml/data/coco.yaml', help='data.yaml path') #coco
     parser.add_argument('--hyp', type=str, default='data/hyp.scratch.p5.yaml', help='hyperparameters path')
     parser.add_argument('--epochs', type=int, default=10)
     parser.add_argument('--batch-size', type=int, default=16, help='total batch size for all GPUs')
@@ -605,7 +564,8 @@ if __name__ == '__main__':
     parser.add_argument('--sync-bn', action='store_true', help='use SyncBatchNorm, only available in DDP mode')
     parser.add_argument('--local_rank', type=int, default=-1, help='DDP parameter, do not modify')
     parser.add_argument('--workers', type=int, default=0, help='maximum number of dataloader workers')
-    parser.add_argument('--project', default='runs/train', help='save to project/name')
+    #parser.add_argument('--project', default='runs/train', help='save to project/name') #coco128
+    parser.add_argument('--project', default='runs/train_coco', help='save to project/name') #coco
     parser.add_argument('--entity', default=None, help='W&B entity')
     parser.add_argument('--name', default='exp', help='save to project/name')
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
@@ -618,7 +578,9 @@ if __name__ == '__main__':
     parser.add_argument('--artifact_alias', type=str, default="latest", help='version of dataset artifact to be used')
     parser.add_argument('--freeze', nargs='+', type=int, default=[0], help='Freeze layers: backbone of yolov7=50, first3=0 1 2')
     parser.add_argument('--v5-metric', action='store_true', help='assume maximum recall as 1.0 in AP calculation')
-    parser.add_argument('--dynamic_batch_size', type=int, default=2, help='dynamic_batch')
+
+    parser.add_argument('--dynamic_batch_size', type=int, default=2, help='random sampling size of depth')
+
     opt = parser.parse_args()
 
     # Set DDP variables
@@ -659,6 +621,7 @@ if __name__ == '__main__':
         opt.batch_size = opt.total_batch_size // opt.world_size
 
     # Hyperparameters
+    # yaml/data/hyp.scratch.p5.yaml
     with open(opt.hyp) as f:
         hyp = yaml.load(f, Loader=yaml.SafeLoader)  # load hyps
 
@@ -670,6 +633,7 @@ if __name__ == '__main__':
             prefix = colorstr('tensorboard: ')
             logger.info(f"{prefix}Start with 'tensorboard --logdir {opt.project}', view at http://localhost:6006/")
             tb_writer = SummaryWriter(opt.save_dir)  # Tensorboard
+        tb_writer = None  # init loggers
         train(hyp, opt, device, tb_writer)
 
     # Evolve hyperparameters (optional)
