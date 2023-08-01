@@ -51,7 +51,7 @@ class YOLOSuperNet(YOLOModel):
     -----------
     model: nn.Sequential
         a sequence of nn.modules, i.e. YOLOSuperNet modules 
-    save: list
+    save: list  
         indice of jumping points to use for forward pass
     depth_list: list of int
         list of depth for each ELANBlock
@@ -65,16 +65,16 @@ class YOLOSuperNet(YOLOModel):
         nc=None, 
         anchors=None,
         ):
-        
+
         self.runtime_depth = 0
-        
+
         super(YOLOSuperNet, self).__init__(cfg, ch, nc, anchors)
-        
+
         self.depth_list = self.yaml['depth_list']
         self.set_max_net()
-        
+
     def forward_once(self, x, profile=False):
-        assert isinstance(self.runtime_depth, list)
+        # assert isinstance(self.runtime_depth, list)
         y, dt = [], []  # outputs
         elan_idx = 0
         for m in self.model:
@@ -117,7 +117,7 @@ class YOLOSuperNet(YOLOModel):
         self.set_active_subnet(d=max_list(self.depth_list))
         
     def set_active_subnet(self, d=None, **kwargs):
-        self.runtime_depth = d   
+        self.runtime_depth = d
         
     def sample_active_subnet(self):       
         # sample depth
