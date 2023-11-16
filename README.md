@@ -16,27 +16,18 @@
 - [X] ELAN Block 정의
 - [X] YOLO SuperNet 정의
 - [X] Evolution Search 구현 (실행 파일: search_yolo.py)
-- [ ] 모바일 NAS 코드 통합
-- [ ] TANGO Repo 양식으로 변환 및 통합
-- [ ] 코드 정제 
-  - [ ] 각 코드 파일 별 불필요한 라이브러리 로드 제거
-  - [ ] 모듈 형식 통일
-  - [ ] README 작성
+- [X] 모바일 NAS 코드 통합
+- [X] TANGO Repo 양식으로 변환 및 통합
+- [X] 코드 정제 
+  - [X] 각 코드 파일 별 불필요한 라이브러리 로드 제거
+  - [X] 모듈 형식 통일
+  - [X] README 작성
   
-
-## 2 ways to implement search approach idea
-
-1. ~~Control the number of E-ELAN blocks in each a stage~~
-
-    : ~~각 Stage에서 E-ELAN 블록의 수(depth)를 조절하는 방식~~
-
-2. __Control the number of layers(branch) in each an E-ELAN block__
-
-    : __각 E-ELAN block 내에서 layer의 분기 수를 조절하는 방식__
 
 ## Idea 정리
 
-* TANGO Framework에서 neckNAS > etri directory에 있는 코드 구조 참고
+* __Control the number of layers(branch) in each an E-ELAN block__
 
-* Zero-Cost Predictors 방법들 활용, 특히 [NASLib]()를 응용. 
-왜냐하면 해당 repo가 2022 AutoML Conference의 Zero-Cost NAS Competition에서 수상
+    : __각 E-ELAN block 내에서 layer의 분기 수를 조절하는 방식__
+
+* TANGO Framework에서 neckNAS > etri directory에 있는 코드 구조 참고
